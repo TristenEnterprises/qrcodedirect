@@ -19,7 +19,7 @@ a:hover { text-decoration: underline; }
 .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
 .hidden { display: none !important; }
 button { font-family: inherit; }
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 0; border-radius: 999px; padding: 12px 20px; font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: all .15s ease; text-decoration: none !important; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 0; border-radius: 999px; padding: 12px 20px; font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: all .15s ease; text-decoration: none !important; white-space: nowrap; }
 .btn-dark { background: var(--ink); color: var(--paper); }
 .btn-dark:hover { background: var(--accent); color: #fff; }
 .btn-ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
@@ -43,8 +43,8 @@ button { font-family: inherit; }
 .spin { width: 34px; height: 34px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: rot .8s linear infinite; margin: 60px auto; }
 @keyframes rot { to { transform: rotate(360deg); } }
 .slug-mono { font-family: var(--mono); font-size: .82rem; background: rgba(11,11,9,.05); border-radius: 6px; padding: 1px 7px; }
-.topnav { position: sticky; top: 0; z-index: 20; background: rgba(250,247,240,.9); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
-.topnav-inner { display: flex; align-items: center; justify-content: space-between; height: 60px; gap: 14px; }
+.topnav { position: sticky; top: 0; z-index: 20; background: rgba(250,247,240,.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+.topnav-inner { display: flex; align-items: center; justify-content: space-between; min-height: 58px; gap: 8px 12px; padding: 8px 16px; flex-wrap: wrap; }
 .brand { font-weight: 800; font-size: 1.12rem; letter-spacing: -.01em; color: var(--ink) !important; display: flex; align-items: baseline; gap: 8px; }
 .brand:hover { text-decoration: none; }
 .brand b { color: var(--accent); }
@@ -74,3 +74,7 @@ button { font-family: inherit; }
 .nav-name { display: none; }
 @media (min-width: 600px) { .nav-name { display: inline; } }
 .des-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+@media (max-width: 420px) {
+  .btn-sm { padding: 7px 11px; font-size: .78rem; }
+  .brand { font-size: 1rem; }
+}
