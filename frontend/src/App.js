@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { Routes, Route, Navigate, Link, useNavigate } from "react-router-dom";
+import { Routes, Route, Navigate, Link, useNavigate, useLocation } from "react-router-dom";
 import { api } from "./api";
 import Landing from "./pages/Landing";
 import AuthPage from "./pages/AuthPage";
@@ -13,23 +13,30 @@ export const useAuth = () => useContext(Auth);
 function Nav() {
   const { user, logout } = useAuth();
   const nav = useNavigate();
+  const loc = useLocation();
+  const onHome = loc.pathname === "/";
   return (
     <nav className="topnav">
       <div className="wrap topnav-inner">
         <Link to="/" className="brand">QR<b>Direct</b></Link>
-        <div className="nav-links" style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <a className="navlink" href="/#pricing">Pricing</a>
-          <a className="navlink" href="/#how">How it works</a>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          {onHome && (
+            <>
+              <a className="btn btn-ghost btn-sm" href="/#how">How it works</a>
+              <a className="btn btn-ghost btn-sm" href="/#pricing">Pricing</a>
+            </>
+          )}
           {user ? (
             <>
-              <Link className="navlink" to="/app">My codes</Link>
-              <span style={{ fontSize: ".78rem", color: "var(--muted)" }}>{user.name || user.email}</span>
+              <Link to="/app" className="btn btn-ghost btn-sm">My codes</Link>
+              <Link to="/app/new" className="btn btn-dark btn-sm">New code</Link>
+              <span className="nav-name" style={{ fontSize: ".78rem", color: "var(--muted)", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.name || user.email}</span>
               <button className="btn btn-ghost btn-sm" onClick={async () => { await api.logout().catch(() => {}); logout(); nav("/"); }}>Log out</button>
             </>
           ) : (
             <>
-              <Link className="navlink" to="/login">Log in</Link>
-              <Link to="/register" className="btn btn-dark btn-sm" style={{ padding: "8px 16px" }}>Start free</Link>
+              <Link to="/login" className="btn btn-ghost btn-sm">Log in</Link>
+              <Link to="/register" className="btn btn-dark btn-sm">Start free</Link>
             </>
           )}
         </div>

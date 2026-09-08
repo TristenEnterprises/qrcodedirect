@@ -36,7 +36,7 @@ export default function Dashboard() {
           <h1 className="h" style={{ fontSize: "1.7rem" }}>My codes</h1>
           <p style={{ color: "var(--muted)", fontSize: ".9rem" }}>Design, edit and watch every scan.</p>
         </div>
-        <Link to="/app/new" className="btn btn-dark">＋ New code</Link>
+        <Link to="/app/new" className="btn btn-dark">New code</Link>
       </div>
 
       {err && <div className="banner err">{err}</div>}
