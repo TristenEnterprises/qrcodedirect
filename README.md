@@ -6,7 +6,8 @@ Dynamic QR platform (overnight v1 backend, 8 Sep 2026, Tris + Hermes).
 - **Create** dynamic links/codes: `POST /api/v1/links` (auto or custom slug, style params, optional email gate)
 - **Redirect** `/r/{slug}` → destination, logging every scan (IP, device, referer, country best-effort)
 - **Email capture**: gated codes serve a branded landing that collects an email before redirecting (MailWizz export hook TBD)
-- **Styled QR artwork**: `/qr/{slug}.png` + `.svg` rendered from stored style (fg/bg colours, rounded dots, high-res, H error correction, optional centre logo patch)
+- **Styled QR artwork**: `/qr/{slug}.png` + `.svg` rendered from stored style — solid OR linear-gradient modules (any angle), bg colour, square/rounded dots, optional centre **logo image** (punch-out + backing, EC H, size 8–26%), high-res print scale; scannability guard rails (dark-colour rule + logo-size cap) surfaced as `style_warnings` on create/patch
+- **Designer preview**: `POST /api/v1/preview` renders any dest+style to PNG (live preview in the designer, no DB row needed)
 - **Stats**: `/api/v1/links/{slug}/stats?days=30` — totals, unique visitors, daily series, top countries/devices/referers, leads captured
 - Single-owner API key auth (`X-API-Key`, auto-generated at `/opt/qrcodedirect/config/api_key`)
 

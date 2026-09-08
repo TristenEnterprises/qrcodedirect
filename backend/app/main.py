@@ -207,11 +207,15 @@ async def create_link(request: Request, x_api_key: str | None = Header(default=N
     style = body.get("style") or {}
     if not isinstance(style, dict):
         raise HTTPException(status_code=400, detail="style must be an object")
+    warnings = qrlib.validate_style(style)
     link_id = db.create_link(slug, dest, str(body.get("name") or ""), style,
                              bool(body.get("gate_email")))
     link = db.get_link_by_slug(slug)
     link["id"] = link_id
-    return JSONResponse(_public_link(link), status_code=201)
+    payload = _public_link(link)
+    if warnings:
+        payload["style_warnings"] = warnings
+    return JSONResponse(payload, status_code=201)
 
 
 @app.get("/api/v1/links")
@@ -240,6 +244,7 @@ async def patch_link(slug: str, request: Request,
     require_key(x_api_key)
     body = await request.json()
     fields: dict = {}
+    warnings: list[str] = []
     if "dest_url" in body:
         fields["dest_url"] = validate_url(body["dest_url"])
     if "name" in body:
@@ -248,13 +253,31 @@ async def patch_link(slug: str, request: Request,
         if not isinstance(body["style"], dict):
             raise HTTPException(status_code=400, detail="style must be an object")
         fields["style"] = body["style"]
+        warnings = qrlib.validate_style(body["style"])
     if "gate_email" in body:
         fields["gate_email"] = 1 if body["gate_email"] else 0
     if "active" in body:
         fields["active"] = 1 if body["active"] else 0
     if not db.update_link(slug, **fields):
         raise HTTPException(status_code=404, detail="Unknown code")
-    return _public_link(db.get_link_by_slug(slug))
+    payload = _public_link(db.get_link_by_slug(slug))
+    if warnings:
+        payload["style_warnings"] = warnings
+    return payload
+
+
+@app.post("/api/v1/preview")
+async def style_preview(request: Request, x_api_key: str | None = Header(default=None)):
+    """Render a QR PNG for an arbitrary destination + style — the designer's live preview."""
+    require_key(x_api_key)
+    body = await request.json()
+    dest = validate_url(body.get("dest_url"))
+    style = body.get("style") or {}
+    if not isinstance(style, dict):
+        raise HTTPException(status_code=400, detail="style must be an object")
+    png = qrlib.render_png(dest, style)
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.delete("/api/v1/links/{slug}")
