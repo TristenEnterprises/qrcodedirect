@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+qrcode
+pillow
+httpx2
+pytest
