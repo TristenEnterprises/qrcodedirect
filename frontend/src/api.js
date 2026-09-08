@@ -31,7 +31,19 @@ export const api = {
       body: JSON.stringify(b),
     });
     if (!r.ok) throw new Error("Preview failed");
-    return URL.createObjectURL(await r.blob());
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    const CH = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let out = "";
+    for (let i = 0; i < bytes.length; i += 3) {
+      const b0 = bytes[i], b1 = bytes[i + 1], b2 = bytes[i + 2];
+      out += CH[b0 >> 2] + CH[((b0 & 3) << 4) | (b1 === undefined ? 0 : b1 >> 4)];
+      if (b1 === undefined) out += "==";
+      else {
+        out += CH[((b1 & 15) << 2) | (b2 === undefined ? 0 : b2 >> 6)];
+        out += b2 === undefined ? "=" : CH[b2 & 63];
+      }
+    }
+    return "data:image/png;base64," + out;
   },
 };
 
