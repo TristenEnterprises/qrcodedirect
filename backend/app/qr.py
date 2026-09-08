@@ -86,12 +86,17 @@ def render_png(content: str, style: dict) -> bytes:
     mods = qr.modules
     radius = max(1, scale // 3)
     step = 1
+    b = int(s.get("margin", 3))  # quiet zone; qr.modules includes it
     for y in range(size):
         for x in range(size):
             if not mods[y][x]:
                 continue
             x0, y0 = x * scale, y * scale
-            if rounded:
+            # finder patterns stay square — rounding them hurts scan reliability
+            in_finder = (b <= x < b + 7 and b <= y < b + 7) or \
+                        (size - b - 7 <= x < size - b and b <= y < b + 7) or \
+                        (b <= x < b + 7 and size - b - 7 <= y < size - b)
+            if rounded and not in_finder:
                 d.rounded_rectangle([x0, y0, x0 + scale, y0 + scale], radius=radius, fill=fg)
             else:
                 d.rectangle([x0, y0, x0 + scale - step, y0 + scale - step], fill=fg)
