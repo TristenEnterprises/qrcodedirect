@@ -88,9 +88,11 @@ def _gradient_image(size_px: int, colors: list, angle: float) -> Image.Image:
         return base.resize((1, size_px)).resize((size_px, size_px))
     if abs(a % 180) < 0.01:
         return base.resize((size_px, size_px))
-    # oversize + rotate so the whole canvas is covered at any angle
+    # oversize + rotate so the whole canvas is covered at any angle.
+    # Build the stripe as a full square so non-axis angles fill the canvas
+    # (a 1px-tall stripe rotated 135deg leaves only a thin diagonal → black crop).
     diag = int(size_px * 1.5) + 2
-    big = base.resize((diag, 1))
+    big = base.resize((diag, diag))
     rot = big.rotate(-a, expand=True, resample=Image.BICUBIC)
     # crop centre square
     w, h = rot.size
