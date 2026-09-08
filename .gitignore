@@ -4,4 +4,6 @@ config/
 __pycache__/
 *.pyc
 .pytest_cache/
+frontend/node_modules/
+frontend/build/
 sample-qr.png

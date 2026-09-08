@@ -1,28 +1,37 @@
-"""QRCodeDirect — FastAPI backend (overnight v1, 8 Sep 2026).
+"""QRCodeDirect — FastAPI backend v2 (customer accounts + storefront, 8 Sep 2026).
 
 Public:
   GET  /r/{slug}            redirect (302) with scan logging; gated codes show capture
   POST /r/{slug}/capture    {email} -> store lead (MailWizz hook TBD), then redirect
   GET  /qr/{slug}.png|svg   styled QR render from the link's stored style
 
-Admin API (X-API-Key header; single-owner v1, multi-tenant users later):
-  POST   /api/v1/links              create {dest_url, slug?, name?, style?, gate_email?}
-  GET    /api/v1/links              list with scan counts
-  GET    /api/v1/links/{slug}       detail incl. stats
-  PATCH  /api/v1/links/{slug}       update dest/name/style/gate_email/active
+Customer API (session cookie `qrd_auth`; register → login → use):
+  POST   /api/auth/register   {name,email,password}
+  POST   /api/auth/login      {email,password} -> cookie
+  POST   /api/auth/logout
+  GET    /api/auth/me
+  POST   /api/v1/links              create for the logged-in owner
+  GET    /api/v1/links              list own (with scan counts)
+  GET    /api/v1/links/{slug}       own detail
+  PATCH  /api/v1/links/{slug}       update own
   DELETE /api/v1/links/{slug}
   GET    /api/v1/links/{slug}/stats?days=30
-  POST   /api/v1/links/{slug}/regenerate-qr   (placeholder for style preview flow)
+  POST   /api/v1/preview            style preview PNG (auth or admin key)
+
+X-API-Key (server admin key) can impersonate admin: sees ALL links and may act on any slug.
+The public /qr/{slug}.* endpoints stay open so codes work without login.
 """
 import hashlib
 import hmac
 import os
 import re
 import secrets
+import sqlite3
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Response, Header, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
+from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import db
 from . import qr as qrlib
@@ -32,8 +41,11 @@ CONFIG_DIR = Path("/opt/qrcodedirect/config")
 API_KEY_FILE = CONFIG_DIR / "api_key"
 
 BASE_URL = os.environ.get("QR_BASE_URL", "https://qrcodedirect.com")
+FRONTEND_DIST = Path(os.environ.get("QR_FRONTEND_DIST", "/opt/qrcodedirect/frontend/build"))
 
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}[a-z0-9]$|^[a-z0-9]{1,32}$")
+SESSION_DAYS = 30
 
 
 def load_api_key() -> str:
@@ -51,9 +63,67 @@ db.init_db()
 app = FastAPI(docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json")
 
 
+def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 120_000)
+    return digest.hex(), salt
+
+
+def make_session(user_id: int) -> str:
+    exp = int(__import__("time").time()) + SESSION_DAYS * 86400
+    msg = f"qrd:{user_id}:{exp}".encode()
+    return f"{hmac.new(_secret(), msg, hashlib.sha256).hexdigest()}.{user_id}.{exp}"
+
+
+def _secret() -> bytes:
+    f = CONFIG_DIR / "session_secret"
+    if not f.exists():
+        f.write_bytes(secrets.token_bytes(32))
+        os.chmod(f, 0o600)
+    return f.read_bytes()
+
+
+def valid_session(token: str) -> int | None:
+    try:
+        digest, user_id, exp = token.split(".")
+        if int(exp) < __import__("time").time():
+            return None
+        msg = f"qrd:{user_id}:{exp}".encode()
+        if hmac.compare_digest(digest, hmac.new(_secret(), msg, hashlib.sha256).hexdigest()):
+            return int(user_id)
+    except Exception:
+        pass
+    return None
+
+
 def require_key(x_api_key: str | None = Header(default=None)) -> None:
     if not x_api_key or not hmac.compare_digest(x_api_key, API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
+
+
+def current_user(request: Request) -> int | None:
+    return valid_session(request.cookies.get("qrd_auth", ""))
+
+
+def require_user(request: Request) -> int:
+    uid = current_user(request)
+    if uid is None:
+        raise HTTPException(status_code=401, detail="Sign in to continue")
+    return uid
+
+
+def _claim_scope(request: Request, link: dict) -> int | None:
+    """Return the acting user id for admin checks. Admin key → None = all-links admin."""
+    key = request.headers.get("x-api-key")
+    if key and hmac.compare_digest(key, API_KEY):
+        return None
+    return require_user(request)
+
+
+def _owns(link: dict, acting: int | None, request: Request) -> bool:
+    if acting is None:
+        return True  # admin key
+    return link.get("owner_id") == acting
 
 
 def client_ip(request: Request) -> str:
@@ -64,8 +134,8 @@ def client_ip(request: Request) -> str:
 
 
 def make_slug() -> str:
-    alphabet = "abcdefghijkmnpqrstuvwxyz23456789"  # no 0/O/1/l
-    for _ in range(20):
+    alphabet = "abcdefghijkmnpqrstuvwxyz23456789"
+    for _ in range(30):
         cand = "".join(secrets.choice(alphabet) for _ in range(7))
         if not db.slug_taken(cand):
             return cand
@@ -83,6 +153,67 @@ def validate_url(url: str) -> str:
     return url
 
 
+# ── auth ───────────────────────────────────────────────────
+@app.post("/api/auth/register")
+async def register(request: Request):
+    body = await request.json()
+    email = str(body.get("email") or "").strip().lower()
+    name = str(body.get("name") or "").strip()[:80]
+    password = str(body.get("password") or "")
+    if not EMAIL_RE.match(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if db.get_user_by_email(email):
+        raise HTTPException(status_code=409, detail="An account with that email already exists")
+    pw_hash, salt = hash_password(password)
+    uid = db.create_user(email, name, pw_hash, salt)
+    resp = JSONResponse({"ok": True, "user": db.get_user_by_id(uid)})
+    _set_session(resp, uid)
+    return resp
+
+
+@app.post("/api/auth/login")
+async def login(request: Request):
+    body = await request.json()
+    email = str(body.get("email") or "").strip().lower()
+    password = str(body.get("password") or "")
+    user = db.get_user_by_email(email) if email else None
+    if not user:
+        raise HTTPException(status_code=401, detail="Email or password is wrong")
+    digest, _ = hash_password(password, user["pw_salt"])
+    if not hmac.compare_digest(digest, user["pw_hash"]):
+        raise HTTPException(status_code=401, detail="Email or password is wrong")
+    resp = JSONResponse({"ok": True, "user": db.get_user_by_id(user["id"])})
+    _set_session(resp, user["id"])
+    return resp
+
+
+def _cookie_kwargs():
+    secure = os.environ.get("QR_COOKIE_SECURE", "1") != "0"
+    return {"httponly": True, "samesite": "lax", "secure": secure, "path": "/"}
+
+
+def _set_session(resp: Response, uid: int) -> None:
+    resp.set_cookie("qrd_auth", make_session(uid), max_age=SESSION_DAYS * 86400,
+                    **_cookie_kwargs())
+
+
+@app.post("/api/auth/logout")
+def logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie("qrd_auth", path="/")
+    return resp
+
+
+@app.get("/api/auth/me")
+def me(request: Request):
+    uid = current_user(request)
+    if uid is None:
+        raise HTTPException(status_code=401, detail="Not signed in")
+    return {"user": db.get_user_by_id(uid)}
+
+
 # ── public redirect + capture ─────────────────────────────
 @app.get("/r/{slug}")
 async def redirect_slug(slug: str, request: Request, background: BackgroundTasks):
@@ -94,7 +225,6 @@ async def redirect_slug(slug: str, request: Request, background: BackgroundTasks
     ref = request.headers.get("referer", "")
     country = geolib.lookup_country(ip)
     if link["gate_email"]:
-        # served cookie "qrd_<slug>" means we've captured this device already
         if request.cookies.get("qrd_" + slug) != "1":
             background.add_task(db.record_scan, link["id"], ip, country,
                                 geolib.guess_device(ua), ua, ref)
@@ -118,7 +248,7 @@ async def capture_lead(slug: str, request: Request, background: BackgroundTasks)
         raise HTTPException(status_code=400, detail="This code does not gate emails")
     body = await request.json()
     email = str(body.get("email", "")).strip().lower()
-    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+    if not EMAIL_RE.match(email):
         raise HTTPException(status_code=400, detail="Enter a valid email address")
     background.add_task(db.add_lead, link["id"], email)
     resp = RedirectResponse(link["dest_url"], status_code=302)
@@ -172,8 +302,7 @@ async def qr_png(slug: str):
     link = db.get_link_by_slug(slug)
     if not link:
         raise HTTPException(status_code=404, detail="Unknown code")
-    content = f"{BASE_URL}/r/{slug}"
-    png = qrlib.render_png(content, link.get("style"))
+    png = qrlib.render_png(f"{BASE_URL}/r/{slug}", link.get("style"))
     return Response(content=png, media_type="image/png",
                     headers={"Cache-Control": "public, max-age=3600"})
 
@@ -183,16 +312,15 @@ async def qr_svg(slug: str):
     link = db.get_link_by_slug(slug)
     if not link:
         raise HTTPException(status_code=404, detail="Unknown code")
-    content = f"{BASE_URL}/r/{slug}"
-    svg = qrlib.render_svg(content, link.get("style"))
+    svg = qrlib.render_svg(f"{BASE_URL}/r/{slug}", link.get("style"))
     return Response(content=svg, media_type="image/svg+xml",
                     headers={"Cache-Control": "public, max-age=3600"})
 
 
-# ── admin API ───────────────────────────────────────────────
+# ── admin/customer API ─────────────────────────────────────
 @app.post("/api/v1/links")
-async def create_link(request: Request, x_api_key: str | None = Header(default=None)):
-    require_key(x_api_key)
+async def create_link(request: Request):
+    uid = _claim_scope(request, {})
     body = await request.json()
     dest = validate_url(body.get("dest_url"))
     slug = str(body.get("slug") or "").strip().lower()
@@ -209,7 +337,7 @@ async def create_link(request: Request, x_api_key: str | None = Header(default=N
         raise HTTPException(status_code=400, detail="style must be an object")
     warnings = qrlib.validate_style(style)
     link_id = db.create_link(slug, dest, str(body.get("name") or ""), style,
-                             bool(body.get("gate_email")))
+                             bool(body.get("gate_email")), uid)
     link = db.get_link_by_slug(slug)
     link["id"] = link_id
     payload = _public_link(link)
@@ -219,29 +347,27 @@ async def create_link(request: Request, x_api_key: str | None = Header(default=N
 
 
 @app.get("/api/v1/links")
-async def list_links(x_api_key: str | None = Header(default=None)):
-    require_key(x_api_key)
-    rows = db.list_links()
-    return [{"slug": r["slug"], "dest_url": r["dest_url"], "name": r["name"],
-             "gate_email": bool(r["gate_email"]), "active": bool(r["active"]),
-             "created_at": r["created_at"], "scan_count": r["scans"],
-             "qr_png": f"/qr/{r['slug']}.png", "qr_svg": f"/qr/{r['slug']}.svg"}
-            for r in rows]
+async def list_links(request: Request):
+    uid = _claim_scope(request, {})
+    rows = db.list_links(owner_id=uid)
+    return [_sum_link(r) for r in rows]
 
 
 @app.get("/api/v1/links/{slug}")
-async def link_detail(slug: str, x_api_key: str | None = Header(default=None)):
-    require_key(x_api_key)
+async def link_detail(slug: str, request: Request):
+    acting = _claim_scope(request, {})
     link = db.get_link_by_slug(slug)
-    if not link:
+    if not link or not _owns(link, acting, request):
         raise HTTPException(status_code=404, detail="Unknown code")
     return _public_link(link)
 
 
 @app.patch("/api/v1/links/{slug}")
-async def patch_link(slug: str, request: Request,
-                     x_api_key: str | None = Header(default=None)):
-    require_key(x_api_key)
+async def patch_link(slug: str, request: Request):
+    acting = _claim_scope(request, {})
+    link = db.get_link_by_slug(slug)
+    if not link or not _owns(link, acting, request):
+        raise HTTPException(status_code=404, detail="Unknown code")
     body = await request.json()
     fields: dict = {}
     warnings: list[str] = []
@@ -266,10 +392,29 @@ async def patch_link(slug: str, request: Request,
     return payload
 
 
+@app.delete("/api/v1/links/{slug}")
+async def delete_link(slug: str, request: Request):
+    acting = _claim_scope(request, {})
+    link = db.get_link_by_slug(slug)
+    if not link or not _owns(link, acting, request):
+        raise HTTPException(status_code=404, detail="Unknown code")
+    if not db.delete_link(slug):
+        raise HTTPException(status_code=404, detail="Unknown code")
+    return {"ok": True}
+
+
+@app.get("/api/v1/links/{slug}/stats")
+async def link_stats(slug: str, request: Request, days: int = 30):
+    acting = _claim_scope(request, {})
+    link = db.get_link_by_slug(slug)
+    if not link or not _owns(link, acting, request):
+        raise HTTPException(status_code=404, detail="Unknown code")
+    return db.stats_for(link["id"], days=min(365, max(1, days)))
+
+
 @app.post("/api/v1/preview")
-async def style_preview(request: Request, x_api_key: str | None = Header(default=None)):
-    """Render a QR PNG for an arbitrary destination + style — the designer's live preview."""
-    require_key(x_api_key)
+async def style_preview(request: Request):
+    _claim_scope(request, {})
     body = await request.json()
     dest = validate_url(body.get("dest_url"))
     style = body.get("style") or {}
@@ -280,22 +425,11 @@ async def style_preview(request: Request, x_api_key: str | None = Header(default
                     headers={"Cache-Control": "no-store"})
 
 
-@app.delete("/api/v1/links/{slug}")
-async def delete_link(slug: str, x_api_key: str | None = Header(default=None)):
-    require_key(x_api_key)
-    if not db.delete_link(slug):
-        raise HTTPException(status_code=404, detail="Unknown code")
-    return {"ok": True}
-
-
-@app.get("/api/v1/links/{slug}/stats")
-async def link_stats(slug: str, days: int = 30,
-                     x_api_key: str | None = Header(default=None)):
-    require_key(x_api_key)
-    link = db.get_link_by_slug(slug)
-    if not link:
-        raise HTTPException(status_code=404, detail="Unknown code")
-    return db.stats_for(link["id"], days=min(365, max(1, days)))
+def _sum_link(link: dict) -> dict:
+    return {"slug": link["slug"], "dest_url": link["dest_url"], "name": link["name"],
+            "gate_email": bool(link["gate_email"]), "active": bool(link["active"]),
+            "created_at": link["created_at"], "scan_count": link.get("scans", 0),
+            "qr_png": f"/qr/{link['slug']}.png", "qr_svg": f"/qr/{link['slug']}.svg"}
 
 
 def _public_link(link: dict) -> dict:
@@ -316,4 +450,21 @@ def _public_link(link: dict) -> dict:
 
 @app.get("/healthz")
 async def health():
-    return {"ok": True, "service": "qrcodedirect", "version": "0.1.0-overnight"}
+    return {"ok": True, "service": "qrcodedirect", "version": "0.2.0-multi-user"}
+
+
+# ── storefront SPA (served when the frontend build exists) ──
+if FRONTEND_DIST.exists():
+    app.mount("/static", StaticFiles(directory=FRONTEND_DIST / "static"), name="static")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa(full_path: str):
+        if full_path.startswith(("api/", "r/", "qr/")):
+            raise HTTPException(status_code=404, detail="Not found")
+        candidate = FRONTEND_DIST / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        index = FRONTEND_DIST / "index.html"
+        if index.exists():
+            return HTMLResponse(index.read_text("utf-8"))
+        raise HTTPException(status_code=404, detail="Not found")

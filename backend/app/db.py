@@ -1,22 +1,31 @@
-"""QRCodeDirect — database layer (SQLite v1, 8 Sep 2026).
+"""QRCodeDirect — database layer v2 (users + ownership, 8 Sep 2026).
 
 Tables:
-  links   — one row per QR code (slug, destination, style params, flags)
-  scans   — one row per hit on /r/{slug}
-  leads   — captured emails on gated codes
+  users  — customer accounts (email+password, pbkdf2)
+  links  — one row per QR code (owner_id nullable = admin/system/demo)
+  scans  — one row per hit on /r/{slug}
+  leads  — captured emails on gated codes
 """
 import json
 import os
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-DATA_DIR = Path = os.environ.get("QR_DATA_DIR", "/opt/qrcodedirect/data")
+DATA_DIR = os.environ.get("QR_DATA_DIR", "/opt/qrcodedirect/data")
 DB_PATH = os.path.join(DATA_DIR, "qr.db")
 
 _write_lock = threading.Lock()
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email TEXT UNIQUE NOT NULL,
+  name TEXT DEFAULT '',
+  pw_hash TEXT NOT NULL,
+  pw_salt TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS links (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   slug TEXT UNIQUE NOT NULL,
@@ -25,6 +34,7 @@ CREATE TABLE IF NOT EXISTS links (
   style TEXT NOT NULL DEFAULT '{}',
   gate_email INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1,
+  owner_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -55,10 +65,18 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def days_ago_iso(days: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=max(1, days))).isoformat(timespec="seconds")
+
+
 def init_db() -> None:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     with _conn() as c:
         c.executescript(SCHEMA)
+        cols = [row["name"] for row in c.execute("PRAGMA table_info(links)").fetchall()]
+        if "owner_id" not in cols:  # migration from pre-multi-user v1 db
+            c.execute("ALTER TABLE links ADD COLUMN owner_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_links_owner ON links(owner_id)")
 
 
 def _conn() -> sqlite3.Connection:
@@ -69,15 +87,44 @@ def _conn() -> sqlite3.Connection:
     return c
 
 
-# ---------- links ----------
-def create_link(slug: str, dest_url: str, name: str, style: dict,
-                gate_email: bool) -> int:
+# ---------- users ----------
+def create_user(email: str, name: str, pw_hash: str, salt: str) -> int:
     ts = now_iso()
     with _write_lock, _conn() as c:
         cur = c.execute(
-            "INSERT INTO links (slug,dest_url,name,style,gate_email,created_at,updated_at)"
-            " VALUES (?,?,?,?,?,?,?)",
-            (slug, dest_url, name, json.dumps(style), 1 if gate_email else 0, ts, ts),
+            "INSERT INTO users (email,name,pw_hash,pw_salt,created_at) VALUES (?,?,?,?,?)",
+            (email.lower().strip(), (name or "").strip()[:80], pw_hash, salt, ts),
+        )
+        return cur.lastrowid
+
+
+def get_user_by_email(email: str):
+    with _conn() as c:
+        row = c.execute("SELECT * FROM users WHERE email=?", (email.lower().strip(),)).fetchone()
+    return dict(row) if row else None
+
+
+def get_user_by_id(user_id: int):
+    with _conn() as c:
+        row = c.execute("SELECT id,email,name,created_at FROM users WHERE id=?", (user_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def count_users() -> int:
+    with _conn() as c:
+        return c.execute("SELECT COUNT(*) n FROM users").fetchone()["n"]
+
+
+# ---------- links ----------
+def create_link(slug: str, dest_url: str, name: str, style: dict,
+                gate_email: bool, owner_id: int | None) -> int:
+    ts = now_iso()
+    with _write_lock, _conn() as c:
+        cur = c.execute(
+            "INSERT INTO links (slug,dest_url,name,style,gate_email,owner_id,created_at,updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (slug, dest_url, name, json.dumps(style), 1 if gate_email else 0,
+             owner_id, ts, ts),
         )
         return cur.lastrowid
 
@@ -99,7 +146,7 @@ def update_link(slug: str, **fields) -> bool:
     if not cols:
         return False
     cols.append("updated_at")
-    values = [fields[k] if k in fields else None for k in cols[:-1]]
+    values = [fields[k] for k in cols[:-1]]
     values.append(now_iso())
     values.append(slug)
     sql = f"UPDATE links SET {', '.join(k + '=?' for k in cols)} WHERE slug=?"
@@ -108,13 +155,23 @@ def update_link(slug: str, **fields) -> bool:
         return cur.rowcount > 0
 
 
-def list_links(owner_filter: bool = True) -> list[dict]:
+def list_links(owner_id: int | None = None) -> list[dict]:
     with _conn() as c:
-        rows = c.execute(
-            "SELECT l.*, (SELECT COUNT(*) FROM scans s WHERE s.link_id=l.id) AS scans"
-            " FROM links l ORDER BY l.id DESC LIMIT 500"
-        ).fetchall()
+        if owner_id is None:
+            rows = c.execute(
+                "SELECT l.*, (SELECT COUNT(*) FROM scans s WHERE s.link_id=l.id) AS scans"
+                " FROM links l ORDER BY l.id DESC LIMIT 500").fetchall()
+        else:
+            rows = c.execute(
+                "SELECT l.*, (SELECT COUNT(*) FROM scans s WHERE s.link_id=l.id) AS scans"
+                " FROM links l WHERE l.owner_id=? ORDER BY l.id DESC LIMIT 500",
+                (owner_id,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def count_links(owner_id: int) -> int:
+    with _conn() as c:
+        return c.execute("SELECT COUNT(*) n FROM links WHERE owner_id=?", (owner_id,)).fetchone()["n"]
 
 
 def delete_link(slug: str) -> bool:
@@ -134,7 +191,7 @@ def record_scan(link_id: int, ip: str, country: str, device: str, ua: str, ref: 
 
 def stats_for(link_id: int, days: int = 30) -> dict:
     days = max(1, days)
-    since = _days_ago_iso(days)
+    since = days_ago_iso(days)
     with _conn() as c:
         total = c.execute("SELECT COUNT(*) n FROM scans WHERE link_id=?",
                           (link_id,)).fetchone()["n"]
@@ -172,11 +229,6 @@ def stats_for(link_id: int, days: int = 30) -> dict:
         "top_referers": referers,
         "leads_captured": leads,
     }
-
-
-def _days_ago_iso(days: int) -> str:
-    from datetime import timedelta
-    return (datetime.now(timezone.utc) - timedelta(days=max(1, days))).isoformat(timespec="seconds")
 
 
 # ---------- leads ----------

@@ -1,0 +1,54 @@
+/* QRCodeDirect design system — cream/ink/accent (8 Sep 2026) */
+:root {
+  --ink: #0B0B09;
+  --paper: #FAF7F0;
+  --card: #FFFFFF;
+  --line: rgba(11, 11, 9, 0.12);
+  --muted: #6B6458;
+  --accent: #E85D3F;
+  --accent-ink: #C43E22;
+  --ok: #1F7A43;
+  --bad: #C0392B;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--paper); color: var(--ink); font-family: var(--font); -webkit-font-smoothing: antialiased; line-height: 1.55; }
+a { color: var(--accent-ink); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+.hidden { display: none !important; }
+button { font-family: inherit; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 0; border-radius: 999px; padding: 12px 20px; font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: all .15s ease; text-decoration: none !important; }
+.btn-dark { background: var(--ink); color: var(--paper); }
+.btn-dark:hover { background: var(--accent); color: #fff; }
+.btn-ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+.btn-ghost:hover { border-color: var(--ink); background: rgba(11,11,9,.04); }
+.btn-accent { background: var(--accent); color: #fff; }
+.btn-accent:hover { background: var(--accent-ink); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn-sm { padding: 8px 14px; font-size: .83rem; }
+.field { display: block; font-size: .7rem; text-transform: uppercase; letter-spacing: .12em; font-weight: 700; color: var(--muted); margin: 14px 0 6px; }
+.input, select.input { width: 100%; background: #fff; border: 1.5px solid var(--line); border-radius: 10px; padding: 12px 13px; font-size: .95rem; color: var(--ink); font-family: inherit; outline: none; }
+.input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(232,93,63,.15); }
+.label-inline { display: flex; align-items: center; justify-content: space-between; }
+.helptext { font-size: .78rem; color: var(--muted); margin-top: 4px; }
+.err { color: var(--bad); font-size: .84rem; font-weight: 600; margin-top: 8px; }
+.banner { border-radius: 10px; padding: 11px 14px; font-size: .86rem; font-weight: 600; margin-top: 12px; }
+.banner.ok { background: rgba(31,122,67,.1); color: var(--ok); }
+.banner.err { background: rgba(192,57,43,.09); color: var(--bad); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+.pill { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+.pill.off { opacity: .55; }
+.spin { width: 34px; height: 34px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: rot .8s linear infinite; margin: 60px auto; }
+@keyframes rot { to { transform: rotate(360deg); } }
+.slug-mono { font-family: var(--mono); font-size: .82rem; background: rgba(11,11,9,.05); border-radius: 6px; padding: 1px 7px; }
+.topnav { position: sticky; top: 0; z-index: 20; background: rgba(250,247,240,.9); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+.topnav-inner { display: flex; align-items: center; justify-content: space-between; height: 60px; gap: 14px; }
+.brand { font-weight: 800; font-size: 1.12rem; letter-spacing: -.01em; color: var(--ink) !important; display: flex; align-items: baseline; gap: 8px; }
+.brand:hover { text-decoration: none; }
+.brand b { color: var(--accent); }
+.navlink { color: var(--muted); font-weight: 600; font-size: .88rem; }
+.navlink:hover { color: var(--ink); text-decoration: none; }
+.grid { display: grid; gap: 18px; }
+.h { font-weight: 800; letter-spacing: -.02em; }
