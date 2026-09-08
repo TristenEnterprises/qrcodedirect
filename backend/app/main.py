@@ -27,6 +27,7 @@ import os
 import re
 import secrets
 import sqlite3
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Response, Header, HTTPException, BackgroundTasks
@@ -133,6 +134,25 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
+# ── lightweight brute-force limiter for auth endpoints ─────
+_AUTH_LIMIT = {}
+_AUTH_LOCK = threading.Lock()
+AUTH_MAX_PER_MIN = 20
+
+
+def _auth_allowed(ip: str) -> bool:
+    import time
+    now = time.time()
+    with _AUTH_LOCK:
+        q = [t for t in _AUTH_LIMIT.get(ip, []) if now - t < 60]
+        if len(q) >= AUTH_MAX_PER_MIN:
+            _AUTH_LIMIT[ip] = q
+            return False
+        q.append(now)
+        _AUTH_LIMIT[ip] = q
+        return True
+
+
 def make_slug() -> str:
     alphabet = "abcdefghijkmnpqrstuvwxyz23456789"
     for _ in range(30):
@@ -156,6 +176,8 @@ def validate_url(url: str) -> str:
 # ── auth ───────────────────────────────────────────────────
 @app.post("/api/auth/register")
 async def register(request: Request):
+    if not _auth_allowed(client_ip(request)):
+        raise HTTPException(status_code=429, detail="Too many attempts — try again in a minute")
     body = await request.json()
     email = str(body.get("email") or "").strip().lower()
     name = str(body.get("name") or "").strip()[:80]
@@ -175,6 +197,8 @@ async def register(request: Request):
 
 @app.post("/api/auth/login")
 async def login(request: Request):
+    if not _auth_allowed(client_ip(request)):
+        raise HTTPException(status_code=429, detail="Too many attempts — try again in a minute")
     body = await request.json()
     email = str(body.get("email") or "").strip().lower()
     password = str(body.get("password") or "")

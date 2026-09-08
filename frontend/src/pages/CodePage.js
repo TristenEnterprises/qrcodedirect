@@ -103,6 +103,7 @@ export default function CodePage() {
           <span className="slug-mono">/{link.slug}</span>
         </div>
         <a className="btn btn-ghost btn-sm" href={link.qr_png} download={`qrcodedirect-${link.slug}.png`}>Download PNG</a>
+        <a className="btn btn-ghost btn-sm" href={link.qr_svg} download={`qrcodedirect-${link.slug}.svg`}>Download SVG</a>
       </div>
       <p className="helptext" style={{ marginBottom: 16 }}>
         Code URL: <span className="slug-mono">{short}</span> · opens <span style={{ color: "var(--muted)" }}>{link.dest_url}</span>
