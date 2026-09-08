@@ -76,9 +76,11 @@ def render_png(content: str, style: dict) -> bytes:
     )
     qr.add_data(content)
     qr.make(fit=True)
-    size = qr.modules_count
+    real = qr.modules_count  # EXCLUDES the quiet zone
+    border = int(s.get("margin", 3))
+    total = real + border * 2
     scale = max(4, int(s.get("scale", 12)))
-    px = size * scale
+    px = total * scale
     img = Image.new("RGB", (px, px), _hex_to_rgb(s.get("bg")))
     d = ImageDraw.Draw(img)
     fg = _hex_to_rgb(s.get("fg", INK))
@@ -86,16 +88,13 @@ def render_png(content: str, style: dict) -> bytes:
     mods = qr.modules
     radius = max(1, scale // 3)
     step = 1
-    b = int(s.get("margin", 3))  # quiet zone; qr.modules includes it
-    for y in range(size):
-        for x in range(size):
+    for y in range(real):
+        for x in range(real):
             if not mods[y][x]:
                 continue
-            x0, y0 = x * scale, y * scale
+            x0, y0 = (x + border) * scale, (y + border) * scale
             # finder patterns stay square — rounding them hurts scan reliability
-            in_finder = (b <= x < b + 7 and b <= y < b + 7) or \
-                        (size - b - 7 <= x < size - b and b <= y < b + 7) or \
-                        (b <= x < b + 7 and size - b - 7 <= y < size - b)
+            in_finder = (x < 7 and y < 7) or (x >= real - 7 and y < 7) or (x < 7 and y >= real - 7)
             if rounded and not in_finder:
                 d.rounded_rectangle([x0, y0, x0 + scale, y0 + scale], radius=radius, fill=fg)
             else:
